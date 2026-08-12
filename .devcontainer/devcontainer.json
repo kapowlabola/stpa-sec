@@ -1,0 +1,14 @@
+{
+  "name": "stpa-sec",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "containerEnv": {
+    "NODE_ENV": "development"
+  },
+  "mounts": [
+    "source=${localEnv:HOME}/.claude,target=/home/node/.claude,type=bind,consistency=cached"
+  ],
+  "remoteUser": "node"
+}
