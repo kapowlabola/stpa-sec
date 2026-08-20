@@ -1,22 +1,46 @@
 import * as S from '../store.js';
-import { h, openCard, colorClass } from '../ui.js';
+import { h, openCard, colorClass, token } from '../ui.js';
+import { NODE_W, NODE_H, COL_W, ROW_H, SUBTITLE_MAX, ZOOM_MIN, ZOOM_MAX, ZOOM_DEFAULT, CASCADE_STEP_MS } from '../geometry.js';
 
-const f = { q: '', owner: 'All', tier: 'All', zoom: 100, legend: false, layoutNonce: 0 };
+const f = { q: '', owner: 'All', tier: 'All', zoom: ZOOM_DEFAULT, legend: false, collapsed: new Set() };
 
-const NW = 152, NH = 58, COL_W = 196, ROW_H = 78;
-// Lane baselines. A node's position is derived, never stored — position churn must
-// not be part of anyone's workflow (that's what makes targeted re-analysis work).
+// Lane baselines. A node's position is derived, never stored — position
+// churn must not be part of anyone's workflow (that's what makes targeted
+// re-analysis work). There is no "Auto Layout" toggle because there is
+// nothing to toggle: layout is always automatic, with no manual mode.
 const LANE_Y = { mission: 56, control: 196, metric: 206, hazard: 306, process: 402, loss: 408 };
 
-const laneOf = (type) => {
-  if (type === 'ControlledProcess') return 'process';
-  return S.TYPES[type].side;
-};
+const laneOf = (type) => (type === 'ControlledProcess' ? 'process' : S.TYPES[type].side);
+
+/** Every entity reachable from `id` via outgoing derives edges — used for the collapse toggle. */
+function descendantsOf(id) {
+  const out = new Set();
+  const queue = S.outgoing(id, 'derives').map(x => x.to);
+  while (queue.length) {
+    const cur = queue.shift();
+    if (out.has(cur)) continue;
+    out.add(cur);
+    for (const e of S.outgoing(cur, 'derives')) queue.push(e.to);
+  }
+  return out;
+}
+
+function computeVisible() {
+  const base = S.all().filter(e => {
+    if (f.owner !== 'All' && e.owner !== f.owner) return false;
+    if (f.tier !== 'All' && S.computedTier(e.id) !== f.tier) return false;
+    if (f.q && !((e.title || '') + ' ' + S.TYPES[e.type].label).toLowerCase().includes(f.q.toLowerCase())) return false;
+    return true;
+  });
+  if (!f.collapsed.size) return base;
+  const hidden = new Set();
+  for (const rootId of f.collapsed) for (const id of descendantsOf(rootId)) hidden.add(id);
+  return base.filter(e => !hidden.has(e.id));
+}
 
 function layout(entities) {
   const buckets = new Map();
   const pos = {};
-  // Deterministic order so the layout doesn't jitter between renders.
   const sorted = [...entities].sort((a, b) =>
     S.TYPES[a.type].rung - S.TYPES[b.type].rung || a.id.localeCompare(b.id));
   for (const e of sorted) {
@@ -25,12 +49,11 @@ function layout(entities) {
     const key = lane + ':' + col;
     const row = buckets.get(key) || 0;
     buckets.set(key, row + 1);
-    pos[e.id] = { x: 24 + col * COL_W, y: LANE_Y[lane] + row * ROW_H, w: NW, h: NH };
+    pos[e.id] = { x: 24 + col * COL_W, y: LANE_Y[lane] + row * ROW_H, w: NODE_W, h: NODE_H };
   }
   return pos;
 }
 
-/** Orthogonal router: forward elbow, vertical for same-column, over-the-top for back edges. */
 function route(a, b) {
   if (b.x > a.x + a.w - 4) {
     const ax = a.x + a.w, ay = a.y + a.h / 2, bx = b.x, by = b.y + b.h / 2;
@@ -51,25 +74,16 @@ const svg = (tag, attrs) => {
   return n;
 };
 
-export function render() {
-  const visible = S.all().filter(e => {
-    if (f.owner !== 'All' && e.owner !== f.owner) return false;
-    if (f.tier !== 'All' && S.computedTier(e.id) !== f.tier) return false;
-    if (f.q && !((e.title || '') + ' ' + S.TYPES[e.type].label).toLowerCase().includes(f.q.toLowerCase())) return false;
-    return true;
-  });
+function buildEdgesSvg(visible, pos) {
   const shown = new Set(visible.map(e => e.id));
-  const pos = layout(visible);
-
   const maxX = Math.max(900, ...Object.values(pos).map(p => p.x + p.w + 60));
   const maxY = Math.max(500, ...Object.values(pos).map(p => p.y + p.h + 50));
-
-  const g = svg('svg', { width: maxX, height: maxY, style: 'position:absolute; top:0; left:0;' });
+  const g = svg('svg', { width: maxX, height: maxY, class: 'diagram-svg' });
   const defs = svg('defs', {});
-  for (const [id, fill] of [['arrowD', '#333'], ['arrowT', '#b23a3a']]) {
+  for (const [id, colorVar] of [['arrowD', '--color-edge-derives'], ['arrowT', '--color-edge-threatens']]) {
     const m = svg('marker', { id, viewBox: '0 0 10 10', refX: '8', refY: '5',
       markerWidth: '7', markerHeight: '7', orient: 'auto-start-reverse' });
-    m.appendChild(svg('path', { d: 'M1 1L9 5L1 9Z', fill }));
+    m.appendChild(svg('path', { d: 'M1 1L9 5L1 9Z', fill: token(colorVar) }));
     defs.appendChild(m);
   }
   g.appendChild(defs);
@@ -78,95 +92,200 @@ export function render() {
     if (!shown.has(e.from) || !shown.has(e.to)) continue;
     const a = pos[e.from], b = pos[e.to];
     const style = e.kind === 'derives'
-      ? { stroke: '#333', 'stroke-width': '1.8', 'marker-end': 'url(#arrowD)' }
+      ? { stroke: token('--color-edge-derives'), 'stroke-width': '1.8', 'marker-end': 'url(#arrowD)' }
       : e.kind === 'threatens'
-      ? { stroke: '#b23a3a', 'stroke-width': '1.6', 'stroke-dasharray': '6,4', 'marker-end': 'url(#arrowT)' }
-      : { stroke: '#2f8f6f', 'stroke-width': '1.6', 'stroke-dasharray': '2,4' };
-    const line = svg('polyline', { points: route(a, b), fill: 'none', ...style });
+      ? { stroke: token('--color-edge-threatens'), 'stroke-width': '1.6', 'stroke-dasharray': '6,4', 'marker-end': 'url(#arrowT)' }
+      : { stroke: token('--color-edge-equivalence'), 'stroke-width': '1.8', 'stroke-dasharray': '2,4' };
+    const line = svg('polyline', { points: route(a, b), fill: 'none', 'data-edge-kind': e.kind, ...style });
     line.appendChild(svg('title', {})).textContent = e.kind;
     g.appendChild(line);
   }
+  return { svgEl: g, maxX, maxY };
+}
 
-  const nodes = visible.map(e => {
-    const p = pos[e.id];
-    const equiv = S.linksFor(e.id).some(x => x.kind === 'equivalence');
-    const tier = S.computedTier(e.id);
-    const cls = ['node', colorClass(e.type),
-      S.isOrphan(e.id) ? 'orphan' : '', equiv ? 'equiv' : '',
-      S.isRed(tier) ? 'red-tier' : ''].filter(Boolean).join(' ');
-    return h('div', {
-      class: cls,
-      style: `left:${p.x}px; top:${p.y}px; width:${p.w}px; height:${p.h}px;`,
-      title: `${S.TYPES[e.type].label} — ${tier}`,
-      onclick: ev => openCard(ev, e.id),
-    },
-      equiv ? h('span', { class: 'chain', title: 'equivalence link' }, '⛓') : null,
-      h('span', { class: 't' }, S.TYPES[e.type].label),
-      h('span', { class: 's' }, (e.title || '(untitled)').slice(0, 46)));
-  });
+function nodeClass(e, equivPartnerId) {
+  const tier = S.computedTier(e.id);
+  return ['node', colorClass(e.type),
+    S.isOrphan(e.id) ? 'orphan' : '',
+    equivPartnerId ? 'equiv' : '',
+    S.isRed(tier) ? 'red-tier' : '',
+    e.reviewState === 'needs-review' ? 'stale' : '',
+  ].filter(Boolean).join(' ');
+}
 
+function equivPartnerOf(id) {
+  const link = S.linksFor(id).find(x => x.kind === 'equivalence');
+  if (!link) return null;
+  return link.from === id ? link.to : link.from;
+}
+
+function buildNode(e, p) {
+  const equivPartnerId = equivPartnerOf(e.id);
+  const tier = S.computedTier(e.id);
+  const hasChildren = S.outgoing(e.id, 'derives').length > 0;
+  const node = h('div', {
+    class: nodeClass(e, equivPartnerId),
+    style: `left:${p.x}px; top:${p.y}px; width:${p.w}px; height:${p.h}px;` +
+           (e.reviewState === 'needs-review' ? `transition-delay:${(e.staleDepth || 0) * CASCADE_STEP_MS}ms;` : ''),
+    title: `${S.TYPES[e.type].label} — ${tier}${e.reviewState === 'needs-review' ? ' — needs review' : ''}`,
+    'data-entity-id': e.id,
+    onclick: ev => openCard(ev, e.id),
+    onmouseenter: () => { if (equivPartnerId) document.querySelector(`[data-entity-id="${equivPartnerId}"]`)?.classList.add('equiv-hover'); },
+    onmouseleave: () => { if (equivPartnerId) document.querySelector(`[data-entity-id="${equivPartnerId}"]`)?.classList.remove('equiv-hover'); },
+  },
+    equivPartnerId ? h('span', { class: 'chain', title: 'Equivalence link — click either node to open it' }, '⛓') : null,
+    hasChildren ? h('span', {
+      class: 'collapse-toggle', title: f.collapsed.has(e.id) ? 'Expand' : 'Collapse',
+      onclick: ev => { ev.stopPropagation(); f.collapsed.has(e.id) ? f.collapsed.delete(e.id) : f.collapsed.add(e.id); S.emit(); },
+    }, f.collapsed.has(e.id) ? '▸' : '▾') : null,
+    h('span', { class: 't' }, S.TYPES[e.type].label),
+    h('span', { class: 's' }, (e.title || '(untitled)').slice(0, SUBTITLE_MAX)));
+  return node;
+}
+
+/** Patch an already-mounted node element in place — same element, new class/text/position, so a CSS transition can fire. */
+function patchNode(el, e, p) {
+  const equivPartnerId = equivPartnerOf(e.id);
+  el.className = nodeClass(e, equivPartnerId);
+  el.style.left = p.x + 'px';
+  el.style.top = p.y + 'px';
+  el.style.transitionDelay = e.reviewState === 'needs-review' ? `${(e.staleDepth || 0) * CASCADE_STEP_MS}ms` : '';
+  const tier = S.computedTier(e.id);
+  el.title = `${S.TYPES[e.type].label} — ${tier}${e.reviewState === 'needs-review' ? ' — needs review' : ''}`;
+  const s = el.querySelector('.s');
+  if (s) s.textContent = (e.title || '(untitled)').slice(0, SUBTITLE_MAX);
+  const collapseToggle = el.querySelector('.collapse-toggle');
+  if (collapseToggle) collapseToggle.textContent = f.collapsed.has(e.id) ? '▸' : '▾';
+}
+
+let mounted = null; // { diagramEl, canvasWrapEl, nodeEls: Map<id, HTMLElement> }
+
+function buildDiagram() {
+  const visible = computeVisible();
+  const pos = layout(visible);
+  const { svgEl, maxX, maxY } = buildEdgesSvg(visible, pos);
   const diagram = h('div', {
-    class: 'diagram',
+    class: 'diagram', id: 'ladderDiagram',
     style: `width:${maxX}px; height:${maxY}px; transform:scale(${f.zoom / 100});`,
   },
-    h('div', { class: 'lane-label', style: 'left:24px; top:38px;' }, 'top-down (mission side)'),
-    h('div', { class: 'lane-label', style: 'left:24px; top:180px;' }, 'convergence'),
-    h('div', { class: 'lane-label', style: 'left:24px; top:288px;' }, 'bottom-up (hazard side)'),
-    nodes);
-  diagram.insertBefore(g, diagram.firstChild);
+    svgEl,
+    h('div', { class: 'lane-label', style: 'left:24px; top:38px;' }, 'Top-Down (Mission Side)'),
+    h('div', { class: 'lane-label', style: 'left:24px; top:180px;' }, 'Convergence'),
+    h('div', { class: 'lane-label', style: 'left:24px; top:288px;' }, 'Bottom-Up (Hazard Side)'));
 
-  return h('div', { class: 'view' },
+  const nodeEls = new Map();
+  for (const e of visible) {
+    const node = buildNode(e, pos[e.id]);
+    nodeEls.set(e.id, node);
+    diagram.appendChild(node);
+  }
+  return { diagram, visible, pos, nodeEls };
+}
+
+export function render() {
+  const built = buildDiagram();
+  mounted = { diagramEl: built.diagram, nodeEls: built.nodeEls };
+
+  const view = h('div', { class: 'view' },
     h('div', { class: 'toolbar' },
       h('input', {
-        class: 'fake-input', placeholder: 'Search entities…', value: f.q, 'data-focus-key': 'lad-q',
+        class: 'fake-input', placeholder: 'Search Entities…', value: f.q, 'data-focus-key': 'lad-q',
         oninput: ev => { f.q = ev.target.value; S.emit(); },
       }),
       h('select', { class: 'fake-input', onchange: ev => { f.owner = ev.target.value; S.emit(); } },
         [h('option', { value: 'All', selected: f.owner === 'All' }, 'Owner: All'),
-         ...S.OWNERS.map(o => h('option', { value: o, selected: f.owner === o }, o))]),
+         ...S.getSettings().owners.map(o => h('option', { value: o, selected: f.owner === o }, o))]),
       h('select', { class: 'fake-input', onchange: ev => { f.tier = ev.target.value; S.emit(); } },
-        [h('option', { value: 'All', selected: f.tier === 'All' }, 'Risk tier: All'),
+        [h('option', { value: 'All', selected: f.tier === 'All' }, 'Risk Tier: All'),
          ...S.TIERS.map(t => h('option', { value: t, selected: f.tier === t }, t))]),
-      h('button', { class: 'fake-btn', onclick: () => { f.layoutNonce++; S.emit(); } }, 'Auto layout ↻'),
+      f.collapsed.size ? h('button', { class: 'fake-btn', onclick: () => { f.collapsed.clear(); S.emit(); } }, 'Expand All') : null,
       h('div', { class: 'zoom-row' },
-        h('span', { style: 'font-size:11px; color:#666;' }, 'Zoom'),
+        h('span', { class: 'zoom-label' }, 'Zoom'),
         h('input', {
-          type: 'range', min: '40', max: '150', value: String(f.zoom),
+          type: 'range', min: String(ZOOM_MIN), max: String(ZOOM_MAX), value: String(f.zoom),
           oninput: ev => {
             f.zoom = +ev.target.value;
-            const d = document.querySelector('#ladder-diagram-wrap .diagram');
-            if (d) d.style.transform = `scale(${f.zoom / 100})`;
+            if (mounted?.diagramEl) mounted.diagramEl.style.transform = `scale(${f.zoom / 100})`;
             const lbl = document.getElementById('ladderZoomLabel');
             if (lbl) lbl.textContent = f.zoom + '%';
           },
         }),
-        h('span', { id: 'ladderZoomLabel', style: 'font-size:11px; width:34px;' }, f.zoom + '%')),
+        h('span', { id: 'ladderZoomLabel', class: 'zoom-pct' }, f.zoom + '%')),
       h('button', {
         class: 'legend-toggle', onclick: () => { f.legend = !f.legend; S.emit(); },
-      }, f.legend ? 'Hide legend ▴' : 'Show legend ▾')),
+      }, f.legend ? 'Hide Legend ▴' : 'Show Legend ▾')),
 
     f.legend ? legendPanel() : null,
-
-    h('div', { class: 'canvas', id: 'ladder-diagram-wrap' }, diagram),
+    h('div', { class: 'canvas', id: 'ladder-diagram-wrap' }, mounted.diagramEl),
     h('div', { class: 'rowcount' },
-      `${visible.length} nodes shown · positions are auto-derived, never stored · click a node to open its record`));
+      `${built.visible.length} nodes shown${f.collapsed.size ? ` (${f.collapsed.size} subtree${f.collapsed.size === 1 ? '' : 's'} collapsed)` : ''} · positions are auto-derived, never stored · click a node to open its record`));
+
+  return view;
+}
+
+/**
+ * Incremental refresh while the Ladder tab stays mounted. Patches existing
+ * node elements in place (add/remove/patch by entity id) instead of
+ * rebuilding the diagram, which is what lets the "needs review" class
+ * transition actually animate — a freshly created element has no prior
+ * state to animate from.
+ */
+export function update() {
+  if (!mounted || !mounted.diagramEl.isConnected) return; // let app.js fall back to render()
+  patchDiagramInPlace();
+  return true;
+}
+
+function patchDiagramInPlace() {
+  const visible = computeVisible();
+  const pos = layout(visible);
+  const nextIds = new Set(visible.map(e => e.id));
+
+  // Remove nodes no longer visible.
+  for (const [id, el] of [...mounted.nodeEls]) {
+    if (!nextIds.has(id)) { el.remove(); mounted.nodeEls.delete(id); }
+  }
+  // Patch existing, create new.
+  for (const e of visible) {
+    const existing = mounted.nodeEls.get(e.id);
+    if (existing) {
+      patchNode(existing, e, pos[e.id]);
+    } else {
+      const node = buildNode(e, pos[e.id]);
+      mounted.nodeEls.set(e.id, node);
+      mounted.diagramEl.appendChild(node);
+    }
+  }
+
+  // Edges don't animate — regenerate wholesale, cheaper than incremental diffing.
+  const oldSvg = mounted.diagramEl.querySelector('.diagram-svg');
+  const { svgEl, maxX, maxY } = buildEdgesSvg(visible, pos);
+  if (oldSvg) oldSvg.replaceWith(svgEl); else mounted.diagramEl.prepend(svgEl);
+  mounted.diagramEl.style.width = maxX + 'px';
+  mounted.diagramEl.style.height = maxY + 'px';
+
+  const rowcount = mounted.diagramEl.closest('.view')?.querySelector('.rowcount');
+  if (rowcount) {
+    rowcount.textContent = `${visible.length} nodes shown${f.collapsed.size ? ` (${f.collapsed.size} subtree${f.collapsed.size === 1 ? '' : 's'} collapsed)` : ''} · positions are auto-derived, never stored · click a node to open its record`;
+  }
 }
 
 function legendPanel() {
   const row = (sw, txt) => h('div', { class: 'legend-row' }, sw, txt);
   return h('div', { class: 'legend-panel open' },
-    h('div', { class: 'legend-col' }, h('h5', {}, 'Entity color'),
+    h('div', { class: 'legend-col' }, h('h5', {}, 'Entity Color'),
       row(h('span', { class: 'swatch c-mission' }), 'Mission-side (top-down)'),
       row(h('span', { class: 'swatch c-hazard' }), 'Hazard-side (bottom-up)'),
       row(h('span', { class: 'swatch c-control' }), 'Security Control (convergence)'),
       row(h('span', { class: 'swatch c-loss' }), 'Loss (terminal, human-set)'),
       row(h('span', { class: 'swatch c-metric' }), 'Metric')),
-    h('div', { class: 'legend-col' }, h('h5', {}, 'Edge / link style'),
-      row(h('span', { class: 'line-sample', style: 'border-top:2px solid #333;' }), 'derives — drives rollup math'),
-      row(h('span', { class: 'line-sample', style: 'border-top:2px dashed var(--c-loss);' }), 'threatens — traceability only'),
-      row(h('span', { class: 'line-sample', style: 'border-top:2px dotted var(--c-control);' }), 'equivalence link (⛓, no direction)')),
+    h('div', { class: 'legend-col' }, h('h5', {}, 'Edge / Link Style'),
+      row(h('span', { class: 'line-sample derives-sample' }), 'Derives — drives rollup math'),
+      row(h('span', { class: 'line-sample threatens-sample' }), 'Threatens — traceability only'),
+      row(h('span', { class: 'line-sample equivalence-sample' }), 'Equivalence link (⛓, no direction)')),
     h('div', { class: 'legend-col' }, h('h5', {}, 'Flags'),
-      row(h('span', { class: 'swatch', style: 'background:#fff; border:2.5px dashed var(--c-loss);' }), 'orphan / gap'),
-      row(h('span', { class: 'swatch', style: 'background:#fff; box-shadow:inset 0 -4px 0 var(--c-loss);' }), 'Critical or above (red boundary)'),
-      row(h('span', { class: 'tier-pill grey', style: 'width:auto;' }, '✎'), 'human-set, not calculated')));
+      row(h('span', { class: 'swatch orphan-swatch' }), 'Orphan / gap'),
+      row(h('span', { class: 'swatch red-tier-swatch' }), 'Critical or above (red boundary)'),
+      row(h('span', { class: 'swatch stale-swatch' }), 'Needs review'),
+      row(h('span', { class: 'tier-pill grey human-sample' }, '✑'), 'Human-set, not calculated')));
 }

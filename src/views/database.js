@@ -1,13 +1,14 @@
 import * as S from '../store.js';
-import { h, openCard, typeBadge, tierPill, colorClass } from '../ui.js';
+import { h, openCard, typeBadge, tierPill, reviewBadge, colorClass } from '../ui.js';
 
 // View-local filter state, survives re-renders.
-const f = { q: '', type: 'All', edge: 'All', orphansOnly: false, showTypeFields: false };
+const f = { q: '', type: 'All', edge: 'All', orphansOnly: false, reviewOnly: false, showTypeFields: false };
 
 export function render() {
   const rows = S.all()
     .filter(e => f.type === 'All' || e.type === f.type)
     .filter(e => !f.orphansOnly || S.isOrphan(e.id))
+    .filter(e => !f.reviewOnly || e.reviewState === 'needs-review')
     .filter(e => {
       if (!f.q) return true;
       const hay = [e.title, e.notes, e.owner, S.TYPES[e.type].label, e.description, e.context]
@@ -16,6 +17,8 @@ export function render() {
     })
     .sort((a, b) => S.TYPES[a.type].rung - S.TYPES[b.type].rung ||
                     a.type.localeCompare(b.type) || a.title.localeCompare(b.title));
+
+  const settings = S.getSettings();
 
   const cellSelect = (e, key, opts, blank) => h('td', { class: 'editable-cell' },
     h('select', {
@@ -26,11 +29,11 @@ export function render() {
 
   const linkCells = (e) => {
     // The edge-type filter narrows what this column CONTAINS, not just how it looks —
-    // derives vs threatens has to be a queryable dimension.
-    const kinds = f.edge === 'All' ? null : f.edge === 'Derives only' ? 'derives'
-                : f.edge === 'Threatens only' ? 'threatens' : 'equivalence';
+    // derives vs threatens has to be a queryable dimension, not a colour.
+    const kinds = f.edge === 'All' ? null : f.edge === 'Derives Only' ? 'derives'
+                : f.edge === 'Threatens Only' ? 'threatens' : 'equivalence';
     const links = S.linksFor(e.id).filter(x => !kinds || x.kind === kinds);
-    if (!links.length) return h('td', { style: 'color:#aaa;' }, '—');
+    if (!links.length) return h('td', { class: 'muted-cell' }, '—');
     return h('td', {}, links.map(x => {
       const other = S.get(x.from === e.id ? x.to : x.from);
       if (!other) return null;
@@ -45,26 +48,27 @@ export function render() {
 
   const table = h('table', { class: 'wire' },
     h('tr', {},
-      h('th', {}, 'Type'), h('th', { style: 'width:24%;' }, 'Title'), h('th', {}, 'Owner'),
-      h('th', {}, 'Status'), h('th', {}, 'Priority'), h('th', {}, 'Risk tier'),
-      f.showTypeFields ? h('th', {}, 'Type-specific') : null,
-      h('th', { style: 'width:26%;' }, `Linked${f.edge === 'All' ? '' : ' — ' + f.edge}`),
+      h('th', {}, 'Type'), h('th', { style: 'width:22%;' }, 'Title'), h('th', {}, 'Owner'),
+      h('th', {}, 'Status'), h('th', {}, 'Priority'), h('th', {}, 'Risk Tier'), h('th', {}, 'Review'),
+      f.showTypeFields ? h('th', {}, 'Type-Specific') : null,
+      h('th', { style: 'width:24%;' }, `Linked${f.edge === 'All' ? '' : ' — ' + f.edge}`),
       h('th', {}, 'Attach.')),
-    rows.map(e => h('tr', { class: S.isOrphan(e.id) ? 'orphanrow' : '' },
+    rows.map(e => h('tr', { class: [S.isOrphan(e.id) && 'orphanrow', e.reviewState === 'needs-review' && 'stalerow'].filter(Boolean).join(' ') },
       h('td', {}, h('span', {
         class: 'type-badge ' + colorClass(e.type), style: 'cursor:pointer;',
-        title: 'Open detail card',
+        title: 'Open Detail Card',
         onclick: ev => openCard(ev, e.id),
-      }, S.TYPES[e.type].label), S.isOrphan(e.id) ? h('span', { title: 'Orphan — no upward link', style: 'color:#b23a3a; font-weight:bold;' }, ' !') : null),
+      }, S.TYPES[e.type].label), S.isOrphan(e.id) ? h('span', { title: 'Orphan — no upward link', class: 'orphan-flag' }, ' !') : null),
       h('td', { class: 'editable-cell' }, h('input', {
         value: e.title, placeholder: '(untitled)', 'data-focus-key': e.id + '-title',
         oninput: ev => S.update(e.id, { title: ev.target.value }),
       })),
-      cellSelect(e, 'owner', S.OWNERS, '—'),
+      cellSelect(e, 'owner', settings.owners, '—'),
       cellSelect(e, 'status', S.STATUSES),
       cellSelect(e, 'priority', S.PRIORITIES),
       h('td', { style: 'cursor:pointer;', onclick: ev => openCard(ev, e.id) }, tierPill(e.id)),
-      f.showTypeFields ? h('td', { style: 'font-size:10px; color:#666;' }, typeFields(e)) : null,
+      h('td', { style: 'cursor:pointer;', onclick: ev => openCard(ev, e.id) }, reviewBadge(e.id)),
+      f.showTypeFields ? h('td', { class: 'type-specific-cell' }, typeFields(e)) : null,
       linkCells(e),
       h('td', { style: 'text-align:center;' }, e.attachments.length || '0'))));
 
@@ -77,40 +81,46 @@ export function render() {
       }),
       h('select', {
         class: 'fake-input', onchange: ev => { f.type = ev.target.value; S.emit(); },
-      }, [h('option', { value: 'All', selected: f.type === 'All' }, 'Entity type: All'),
+      }, [h('option', { value: 'All', selected: f.type === 'All' }, 'Entity Type: All'),
           ...Object.keys(S.TYPES).map(t =>
             h('option', { value: t, selected: f.type === t }, S.TYPES[t].label))]),
       h('select', {
         class: 'fake-input', onchange: ev => { f.edge = ev.target.value; S.emit(); },
-      }, ['All', 'Derives only', 'Threatens only', 'Equivalence only'].map(o =>
-        h('option', { value: o, selected: f.edge === o }, o === 'All' ? 'Edge type: All' : o))),
+      }, ['All', 'Derives Only', 'Threatens Only', 'Equivalence Only'].map(o =>
+        h('option', { value: o, selected: f.edge === o }, o === 'All' ? 'Edge Type: All' : o))),
       h('button', {
         class: 'fake-btn' + (f.orphansOnly ? ' on' : ''),
         onclick: () => { f.orphansOnly = !f.orphansOnly; S.emit(); },
-      }, `Orphans only ${f.orphansOnly ? '☑' : '☐'}`),
+      }, `Orphans Only ${f.orphansOnly ? '☑' : '☐'}`),
+      h('button', {
+        class: 'fake-btn' + (f.reviewOnly ? ' on' : ''),
+        onclick: () => { f.reviewOnly = !f.reviewOnly; S.emit(); },
+      }, `Needs Review Only ${f.reviewOnly ? '☑' : '☐'}`),
       h('button', {
         class: 'fake-btn' + (f.showTypeFields ? ' on' : ''),
         onclick: () => { f.showTypeFields = !f.showTypeFields; S.emit(); },
-      }, 'Type-specific fields'),
+      }, 'Type-Specific Fields'),
       h('select', {
         class: 'fake-input',
         onchange: ev => {
           if (!ev.target.value) return;
           const e = S.create(ev.target.value, {});
           ev.target.value = '';
-          openCard({ stopPropagation() {}, clientX: window.innerWidth / 2, clientY: 140 }, e.id);
+          if (e) openCard({ stopPropagation() {}, clientX: window.innerWidth / 2, clientY: 140 }, e.id);
         },
-      }, [h('option', { value: '' }, '+ New entity…'),
-          ...Object.keys(S.TYPES).map(t => h('option', { value: t }, S.TYPES[t].label))]),
+        // Mission Canvas is a singleton (see store.js's create() guard) and is
+        // entered through its own tab, so it is intentionally absent here.
+      }, [h('option', { value: '' }, '+ New Entity…'),
+          ...Object.keys(S.TYPES).filter(t => t !== 'MissionCanvas').map(t => h('option', { value: t }, S.TYPES[t].label))]),
       h('span', { class: 'sync-note' },
-        'click any cell to edit inline — writes to the same record shown on Ladder / Control Structure')),
+        'Click any cell to edit inline — writes to the same record shown on Ladder / Control Structure.')),
     table,
     h('div', { class: 'rowcount' },
       `${rows.length} of ${S.all().length} entities · ` +
       `${S.all().filter(e => S.isOrphan(e.id)).length} orphan${S.all().filter(e => S.isOrphan(e.id)).length === 1 ? '' : 's'} (shaded red) · ` +
-      `${S.edges().length} links`),
+      `${S.needsReviewCount()} needing review · ${S.edges().length} links`),
     h('div', { class: 'annotation' },
-      'The edge-type filter narrows the contents of the Linked column, not just its highlighting — derives vs. threatens is a queryable dimension, not a colour. Orphan rows shade with the Loss colour, the same signal as the ! badge on the Ladder. Mission Canvas, Controller, Controlled Process and Control Action are exempt from orphan detection.'));
+      'The edge-type filter narrows the contents of the Linked column, not just its highlighting — derives vs. threatens is a queryable dimension, not a colour. Orphan rows shade with the Loss colour, the same signal as the ! badge on the Ladder.'));
 }
 
 function typeFields(e) {

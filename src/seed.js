@@ -1,6 +1,9 @@
 // Worked example from the design spec: small UAS ISR mission.
 // Stress-tests the model: one hazard -> two losses, an equivalence link, a
-// threatens edge with no constraint behind it, and a genuinely orphaned control.
+// threatens edge with no constraint behind it, a genuinely orphaned control,
+// and a metric with two parents (Security Control and Hazard both benefit
+// from the same authentication-rate evidence, per the resolved question that
+// multi-parent metrics are allowed since metrics never enter the rollup math).
 
 export function seed() {
   const entities = {};
@@ -13,12 +16,16 @@ export function seed() {
       id: id(), type, title, owner: f.owner || '', status: f.status || 'To Be Completed',
       priority: f.priority || 'Medium', tier: f.tier || 'Unassessed', notes: f.notes || '',
       attachments: f.attachments || [], aggregation: f.aggregation || 'weighted-average',
-      tierOverride: f.tierOverride || null, ...f,
+      worstN: f.worstN || 1, tierOverride: f.tierOverride || null,
+      reviewState: 'current', staleSince: null, staleReason: null, staleDepth: null,
+      ...f,
     };
     entities[e.id] = e;
     return e;
   };
-  const L = (a, b, kind = 'derives') => { edges.push({ id: 'l' + (++n), from: a.id, to: b.id, kind }); };
+  const L = (a, b, kind = 'derives') => {
+    edges.push({ id: 'l' + (++n), from: a.id, to: b.id, kind, weight: null, note: '' });
+  };
 
   // --- top-down: mission side -----------------------------------------------
   const canvas = E('MissionCanvas', 'UAS ISR Mission', {
@@ -55,11 +62,11 @@ export function seed() {
   });
   L(sr, ctl);
 
-  const metric = E('Metric', '% of uplink messages passing authentication', {
+  const metric = E('Metric', 'Percentage of uplink messages passing authentication', {
     owner: 'Test & Evaluation', priority: 'Medium',
-    value: '99.2', unit: '%', threshold: '99.5', trend: 'flat',
+    value: '99.2', unit: '%', threshold: '99.5', trend: 'Flat',
   });
-  L(ctl, metric);   // the control is what the metric hangs off — its upward link
+  L(ctl, metric);      // parent 1 of 2 — evidences the control's effectiveness
 
   // --- bottom-up: hazard side ------------------------------------------------
   const controller = E('Controller', 'Ground control station',
@@ -73,15 +80,16 @@ export function seed() {
 
   const uca = E('UCA', 'GCS spoofed into issuing unauthorized waypoint command', {
     owner: 'Cybersecurity', priority: 'High', tier: 'Catastrophic',
-    uca_type: 'providing causes hazard',
+    uca_type: 'Providing Causes Hazard',
     context: 'While UAV is executing an autonomous ISR leg beyond visual range.',
-    x: 255, y: 200,
+    x: 255, y: 210,
   });
   L(action, uca);          // can_become
 
   const hazard = E('Hazard', 'UAV executes a navigation command from an unauthenticated source',
     { owner: 'Cybersecurity', priority: 'High' });
   L(uca, hazard);          // leads_to
+  L(hazard, metric);       // parent 2 of 2 — same evidence also tells you the hazard's state
 
   const lossA = E('Loss', 'Loss of the UAV asset',
     { owner: 'Program Management', priority: 'Medium', tier: 'Critical',
@@ -120,6 +128,11 @@ export function seed() {
       designedBy: 'Paola', date: 'Aug 2026', version: '1',
       description: 'UAS ISR Mission — maintain uninterrupted C2 link',
       dirtyAt: null, reviewedAt: Date.now(),
+    },
+    settings: {
+      owners: ['Engineering', 'Cybersecurity', 'Supply Chain', 'Logistics',
+               'Contracting', 'Program Management', 'Test & Evaluation'],
+      redBoundaryScore: 3, // Critical and above = red
     },
   };
 }
