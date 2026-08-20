@@ -1,0 +1,9 @@
+# Local Claude Code overrides — personal to each machine, never committed
+.claude/settings.local.json
+
+# Secrets — .env.example is the committed template and stays tracked
+.env
+.env.local
+.env.*.local
+
+node_modules/

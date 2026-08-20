@@ -2,15 +2,13 @@
   "$schema": "https://cdn.jsdelivr.net/gh/anthropics/claude-code@latest/settings-schema.json",
   "model": "claude-sonnet-5",
   "permissions": {
-    "read": ["**"],
-    "write": ["src/**", "docs/**"]
-  },
-  "hooks": {
-    "preToolUse": [
-      {
-        "matcher": { "tool": "Edit", "path": ".env*" },
-        "action": "deny"
-      }
+    "deny": [
+      "Read(.env)",
+      "Edit(.env)",
+      "Read(.env.local)",
+      "Edit(.env.local)",
+      "Read(.env.*.local)",
+      "Edit(.env.*.local)"
     ]
   }
 }

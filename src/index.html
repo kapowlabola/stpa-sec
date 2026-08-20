@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jacob's Risky Ladder</title>
+<link rel="stylesheet" href="styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>🪜</text></svg>">
+</head>
+<body>
+
+<header>
+  <h1>Jacob's Risky Ladder</h1>
+  <div class="tools">
+    <button id="btn-export" title="Download the whole graph as JSON">Export JSON</button>
+    <button id="btn-import" title="Load a previously exported graph">Import JSON</button>
+    <button id="btn-reset" title="Discard local changes and reload the worked example">Reset to example</button>
+  </div>
+</header>
+
+<div id="root"></div>
+
+<div class="noteline">
+  Phase 1 build — Mission Model Canvas + STPA-Sec risk graph. One entity store, four projections;
+  all edits save to this browser's local storage. Hosting, auth and classification handling are owned by the integrator app.
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
