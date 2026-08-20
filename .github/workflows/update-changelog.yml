@@ -1,0 +1,64 @@
+name: Update Changelog
+
+# Appends one row to CHANGELOG.md whenever a PR is merged to main. Deliberately does
+# NOT call any LLM — claude-review.yml was disabled over per-PR API billing (see PR #13
+# and CHANGELOG.md), so this workflow only reads PR metadata GitHub already has and
+# formats it into a table row. No API key, no per-run cost.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  update-changelog:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Append changelog row
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_FILES: ${{ github.event.pull_request.changed_files }}
+          MERGED_AT: ${{ github.event.pull_request.merged_at }}
+        run: |
+          set -euo pipefail
+          DATE="${MERGED_AT%%T*}"
+          # Escape pipe characters in the title so they don't break the markdown table.
+          SAFE_TITLE=$(printf '%s' "$PR_TITLE" | sed 's/|/\\|/g')
+          ROW="| $DATE | [#$PR_NUMBER]($PR_URL) | $PR_AUTHOR | $SAFE_TITLE | $PR_FILES |"
+
+          MARKER="<!-- CHANGELOG-AUTOUPDATE-MARKER — do not remove, the workflow inserts new rows below this line -->"
+          if ! grep -qF "$MARKER" CHANGELOG.md; then
+            echo "Marker not found in CHANGELOG.md — refusing to guess where to insert. Add the marker back." >&2
+            exit 1
+          fi
+
+          # Insert the new row directly after the marker line, newest entries on top.
+          awk -v marker="$MARKER" -v row="$ROW" '
+            { print }
+            $0 == marker { print row }
+          ' CHANGELOG.md > CHANGELOG.md.tmp
+          mv CHANGELOG.md.tmp CHANGELOG.md
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "docs: log PR #${{ github.event.pull_request.number }} in CHANGELOG.md"
+          git push origin HEAD:main
