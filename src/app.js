@@ -1,16 +1,16 @@
 import * as S from './store.js';
 import { seed } from './seed.js';
-import { h, toast } from './ui.js';
+import { h, toast, openCard } from './ui.js';
 import * as canvasView from './views/canvas.js';
 import * as databaseView from './views/database.js';
 import * as ladderView from './views/ladder.js';
 import * as controlView from './views/control.js';
 
 const TABS = [
-  { id: 'canvas',   label: 'Mission Canvas',   view: canvasView },
-  { id: 'database', label: 'Database',         view: databaseView },
-  { id: 'ladder',   label: 'Risk Ladder',      view: ladderView },
-  { id: 'control',  label: 'Control Structure', view: controlView },
+  { id: 'canvas',   label: 'Mission Canvas',    view: canvasView },
+  { id: 'database', label: 'Database',          view: databaseView },
+  { id: 'ladder',   label: 'Risk Ladder',       view: ladderView },
+  { id: 'control',  label: 'Control Structure',  view: controlView },
 ];
 
 S.init(seed);
@@ -20,8 +20,13 @@ if (!TABS.some(t => t.id === active)) active = 'canvas';
 
 const root = document.getElementById('root');
 
+/**
+ * Full rebuild: builds the nav and calls the active view's render(), which
+ * mounts an entirely fresh subtree. Used for the initial load and for every
+ * tab switch — switching tabs is a natural remount point, since a view that
+ * was not visible has nothing on-screen to animate a transition FROM.
+ */
 function render() {
-  // Preserve focus and caret across the re-render triggered by an edit.
   const a = document.activeElement;
   const key = a && a.dataset ? a.dataset.focusKey : null;
   const start = a && a.selectionStart, end = a && a.selectionEnd;
@@ -49,11 +54,51 @@ function render() {
   window.scrollTo(scroll.x, scroll.y);
 }
 
-S.subscribe(render);
+/**
+ * Store-driven refresh while the same tab stays mounted. If the active
+ * view exports `update()`, it is given the chance to patch its own
+ * already-mounted DOM in place — keyed on entity id — rather than being
+ * torn down and rebuilt. That in-place patch is what lets a CSS transition
+ * fire at all: a freshly created element has no "before" state to animate
+ * from, so the Ladder's animated staleness cascade only reads as an
+ * animation when the node elements it is patching already existed.
+ *
+ * `update()` may return:
+ *  - `true`  — it patched in place; nothing further to do.
+ *  - a Node  — swap just the mounted view container for this fresh one.
+ *  - nothing / not implemented — fall back to a full render().
+ */
+function patch() {
+  const tab = TABS.find(t => t.id === active);
+  if (typeof tab.view.update === 'function') {
+    const result = tab.view.update();
+    if (result === true) return;
+    if (result instanceof Node) {
+      const container = root.querySelector('.view');
+      if (container) { container.replaceWith(result); return; }
+    }
+  }
+  render();
+}
+
+S.subscribe(patch);
 window.addEventListener('hashchange', () => {
   const id = location.hash.slice(1);
   if (TABS.some(t => t.id === id) && id !== active) { active = id; render(); }
 });
+
+/**
+ * Cross-view deep link — used by Control Structure's Hazard nodes, which
+ * are the same UCA-adjacent record the Ladder's bottom-up chain shows and
+ * should open there, not fork a copy. Switches tabs (a full render(), so
+ * the Ladder mounts fresh) and opens that entity's card once mounted.
+ */
+export function goTo(tabId, entityId) {
+  active = tabId;
+  location.hash = '#' + tabId;
+  render();
+  if (entityId) openCard(null, entityId, { x: window.innerWidth / 2 - 150, y: 140 });
+}
 
 // --- header tools ------------------------------------------------------------
 document.getElementById('btn-export').onclick = () => {

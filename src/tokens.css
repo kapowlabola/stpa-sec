@@ -1,0 +1,95 @@
+/*
+ * Design tokens — Jacob's Risky Ladder
+ *
+ * Chrome (header, nav, tables, buttons, hairlines) is strict USWDS
+ * red/white/blue, the usaspending.gov family. Values below are the official
+ * USWDS 3.14 theme and system-color tokens (uswds-tokens/colors/*.json in the
+ * published package) — not approximated.
+ *
+ * Entity semantics (five hues the risk model needs — mission/hazard/control/
+ * loss/metric) reuse the USWDS *extended* system-color families, because the
+ * two-hue theme palette can't carry five distinguishable meanings. Every
+ * stroke color below is verified >=4.5:1 against white; every fill is a "5"
+ * or "10" grade tint from the same family so it always reads as related to
+ * its stroke. Node/table TEXT never uses a hue token directly — it is always
+ * --color-ink on a light fill, which clears >=13:1 in every case. Only the
+ * border/stroke and glyphs carry the semantic hue. This is deliberate: a
+ * per-entity "dark text" variant is one more token to keep in sync for no
+ * accessibility benefit once ink-on-tint already clears text contrast by a
+ * wide margin.
+ *
+ * Rule enforced by the architect agent: every color anywhere in this app
+ * resolves to one of these custom properties. A hex literal in styles.css or
+ * a JS view is a defect. SVG stroke/fill set via setAttribute() can't resolve
+ * var(), so ui.js reads these once through getComputedStyle() and caches them
+ * — that is the one sanctioned way JS may hold a literal hex.
+ */
+
+:root{
+  /* ---- USWDS theme tokens (chrome) -------------------------------------- */
+  --color-primary:         #005ea2;
+  --color-primary-dark:    #1a4480;
+  --color-primary-darker:  #162e51;
+  --color-primary-lighter: #d9e8f6;
+  --color-secondary:       #d83933;
+  --color-secondary-dark:  #b50909;
+
+  /* ---- USWDS neutral ladder (grayscale system tokens) ------------------- */
+  --color-ink:           #1b1b1b;  /* = base-darkest */
+  --color-base-darker:   #3d4551;
+  --color-base-dark:     #565c65;
+  --color-base:          #71767a;
+  --color-base-light:    #a9aeb1;
+  --color-base-lighter:  #dfe1e2;
+  --color-base-lightest: #f0f0f0;
+  --color-white:         #ffffff;
+
+  /* ---- Entity semantics (USWDS extended system-color families) --------- */
+  /* Mission-side (top-down chain): reuses the chrome blue directly. */
+  --color-mission:      var(--color-primary);
+  --color-mission-fill: var(--color-primary-lighter);
+
+  /* Hazard-side (bottom-up chain): gold, vivid-60. 6.42:1 on white. */
+  --color-hazard:      #7a591a;
+  --color-hazard-fill: #f5f0e6;
+
+  /* Security Control (convergence point): mint, vivid-60. 6.69:1 on white. */
+  --color-control:      #146947;
+  --color-control-fill: #dbf6ed;
+
+  /* Loss (terminal, human-set): reuses the chrome secondary red. 4.61:1. */
+  --color-loss:      var(--color-secondary);
+  --color-loss-fill: #f9eeee;
+
+  /* Metric (tracking): violet, vivid-70. 9.48:1 on white — deliberately the
+     highest-margin entity color, since Metric text tends to be numeric and
+     small (value / unit / threshold). */
+  --color-metric:      #54278f;
+  --color-metric-fill: #f4f1f9;
+
+  /* ---- Edge / link semantics --------------------------------------------
+     Per the Phase 2 handoff link-style key: derives is solid black, threatens
+     is dashed red, equivalence is a dotted non-directional line. Threatens
+     and equivalence deliberately reuse the Loss and Control hues rather than
+     inventing two more colors — a threatens edge always terminates near a
+     Loss-adjacent node, an equivalence link always terminates near Security
+     Control, so the reuse is also semantically apt, not just economical. */
+  --color-edge-derives:     var(--color-ink);
+  --color-edge-threatens:   var(--color-loss);
+  --color-edge-equivalence: var(--color-control);
+
+  /* ---- Structural aliases (hairlines, panels, page background) ---------- */
+  --color-bg:     var(--color-white);
+  --color-panel:  var(--color-base-lightest);
+  --color-line:        var(--color-base-light);
+  --color-line-strong: var(--color-ink);
+
+  /* ---- Status (needs-review cascade, Phase 3) ---------------------------
+     Amber, distinct from both the hazard gold and any tier color, so a
+     stale flag is never confused with a hazard-side node or a risk tier. */
+  --color-review:      #ffbe2e; /* gold-vivid-20, used only as a highlight ring/underline, never as text-on-fill */
+  --color-review-fill: #fef0c8; /* gold-vivid-5 */
+  --color-review-text: #5c410a; /* gold-vivid-70, 9.48:1 on white — for the few places review status IS rendered as text */
+
+  --font-sans: "Public Sans", Arial, Helvetica, sans-serif;
+}

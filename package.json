@@ -1,0 +1,14 @@
+{
+  "name": "risky-ladder",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Jacob's Risky Ladder — Mission Model Canvas + STPA-Sec risk graph. No build step; src/ is served as-is.",
+  "scripts": {
+    "start": "npx http-server src -p 5173 -c-1",
+    "test": "node --test test/"
+  },
+  "devDependencies": {
+    "jsdom": "^24.0.0"
+  }
+}
